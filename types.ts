@@ -15,6 +15,7 @@ export enum PriceTrend {
 export interface Bot {
   id: number;
   personality: BotPersonality;
+  initialLvMON: number; // For PnL calculation
   lvMON: number;
   meme: number;
   stakedMeme: number;
@@ -22,6 +23,7 @@ export interface Bot {
   investedMedals: number; // Medals currently in the pool (from yesterday)
   wealth: number;
   chests: number;
+  chestsOpenedToday: number; // Tracked for UI display N(M)
   equipmentCount: number;
   lastActionLog?: string;
   lastDecisionRationale?: string;

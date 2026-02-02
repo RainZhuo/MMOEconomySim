@@ -26,36 +26,50 @@ const BotTable: React.FC<BotTableProps> = ({ bots }) => {
             <th className="px-4 py-3">ID</th>
             <th className="px-4 py-3">Type</th>
             <th className="px-4 py-3 text-right">LvMON</th>
+            <th className="px-4 py-3 text-right">PnL</th>
             <th className="px-4 py-3 text-right">MEME</th>
             <th className="px-4 py-3 text-right">Staked</th>
             <th className="px-4 py-3 text-right">Wealth</th>
+            <th className="px-4 py-3 text-right">宝箱</th>
             <th className="px-4 py-3 text-right">Medals</th>
             <th className="px-4 py-3">Last Action</th>
           </tr>
         </thead>
         <tbody>
-          {bots.map((bot) => (
-            <tr key={bot.id} className="border-b border-slate-700/50 hover:bg-slate-700/30">
-              <td className="px-4 py-2 font-mono">#{bot.id}</td>
-              <td className={`px-4 py-2 font-bold ${getPersonalityColor(bot.personality)}`}>
-                {bot.personality}
-              </td>
-              <td className="px-4 py-2 text-right font-mono text-emerald-300">
-                {formatCurrency(bot.lvMON)}
-              </td>
-              <td className="px-4 py-2 text-right font-mono text-pink-300">
-                {formatCurrency(bot.meme)}
-              </td>
-              <td className="px-4 py-2 text-right font-mono text-indigo-300">
-                {formatCurrency(bot.stakedMeme)}
-              </td>
-              <td className="px-4 py-2 text-right">{formatCurrency(bot.wealth)}</td>
-              <td className="px-4 py-2 text-right">{bot.medals} ({bot.investedMedals})</td>
-              <td className="px-4 py-2 text-xs truncate max-w-[200px] text-slate-400" title={bot.lastActionLog}>
-                {bot.lastActionLog || '-'}
-              </td>
-            </tr>
-          ))}
+          {bots.map((bot) => {
+            const pnl = bot.lvMON - bot.initialLvMON;
+            const pnlColor = pnl >= 0 ? 'text-green-400' : 'text-red-400';
+            const pnlSign = pnl >= 0 ? '+' : '';
+            
+            return (
+              <tr key={bot.id} className="border-b border-slate-700/50 hover:bg-slate-700/30">
+                <td className="px-4 py-2 font-mono">#{bot.id}</td>
+                <td className={`px-4 py-2 font-bold ${getPersonalityColor(bot.personality)}`}>
+                  {bot.personality}
+                </td>
+                <td className="px-4 py-2 text-right font-mono text-emerald-300">
+                  {formatCurrency(bot.lvMON)}
+                </td>
+                <td className={`px-4 py-2 text-right font-mono ${pnlColor}`}>
+                  {pnlSign}{formatCurrency(pnl)}
+                </td>
+                <td className="px-4 py-2 text-right font-mono text-pink-300">
+                  {formatCurrency(bot.meme)}
+                </td>
+                <td className="px-4 py-2 text-right font-mono text-indigo-300">
+                  {formatCurrency(bot.stakedMeme)}
+                </td>
+                <td className="px-4 py-2 text-right">{formatCurrency(bot.wealth)}</td>
+                <td className="px-4 py-2 text-right font-mono text-amber-300">
+                  {bot.chestsOpenedToday}({bot.chests})
+                </td>
+                <td className="px-4 py-2 text-right">{bot.medals} ({bot.investedMedals})</td>
+                <td className="px-4 py-2 text-xs truncate max-w-[200px] text-slate-400" title={bot.lastActionLog}>
+                  {bot.lastActionLog || '-'}
+                </td>
+              </tr>
+            );
+          })}
         </tbody>
       </table>
     </div>

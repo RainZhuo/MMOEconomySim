@@ -15,7 +15,7 @@ import {
 import { 
   randomInt, getAmountOut, getSpotPrice, calculateBuybackRate, calculateNewChests, formatCurrency 
 } from './utils';
-import { generateBotDecisions } from './services/geminiService';
+import { generateSingleBotDecision } from './services/geminiService';
 import InfoCard from './components/InfoCard';
 import BotTable from './components/BotTable';
 import { 
@@ -70,16 +70,19 @@ const App: React.FC = () => {
   const initializeBots = () => {
     const newBots: Bot[] = PERSONALITY_DISTRIBUTION.map((personality, index) => {
       const config = PERSONALITY_CONFIG[personality];
+      const initialFunds = randomInt(config.minStart, config.maxStart);
       return {
         id: index,
         personality,
-        lvMON: randomInt(config.minStart, config.maxStart),
+        initialLvMON: initialFunds,
+        lvMON: initialFunds,
         meme: 0,
         stakedMeme: 0,
         medals: 0,
         investedMedals: 0,
         wealth: 0,
         chests: 0,
+        chestsOpenedToday: 0,
         equipmentCount: 0,
         lastActionLog: "Initialized"
       };
@@ -105,16 +108,12 @@ const App: React.FC = () => {
 
     try {
       addLog('INFO', `--- Day ${day} Start ---`);
-
-      // 1. AI Decision Phase
-      addLog('INFO', 'AI generating decisions...');
-      const decisions = await generateBotDecisions(day, globalState, bots);
       
-      let currentBots = [...bots];
+      // Reset daily counters
+      let currentBots = bots.map(b => ({ ...b, chestsOpenedToday: 0 }));
       let currentState = { ...globalState };
 
-      // 2. Morning Rewards (Based on Yesterday's Pool)
-      // Total Medals from Yesterday
+      // 1. Morning Rewards (Based on Yesterday's Pool)
       const poolTotal = currentState.totalMedalsInPool; 
       let distributedRewardTotal = 0;
       let taxCollected = 0;
@@ -143,7 +142,7 @@ const App: React.FC = () => {
         addLog('INFO', 'No medals in pool yesterday. No rewards distributed.');
       }
 
-      // 3. Tax Redistribution (Based on Wealth)
+      // 2. Tax Redistribution (Based on Wealth)
       if (taxCollected > 0 && currentState.totalWealth > 0) {
          currentBots = currentBots.map(bot => {
            if (bot.wealth > 0) {
@@ -156,31 +155,35 @@ const App: React.FC = () => {
          addLog('INFO', `Redistributed tax dividends to wealthy bots.`);
       }
 
-      // 4. Execution Phase (Shuffle for fairness)
-      const executionOrder = decisions.sort(() => Math.random() - 0.5);
+      // Update State Initial Reward Phase
+      setBots(currentBots);
+      setGlobalState(currentState);
+
+      // 3. Sequential Execution Phase
+      // Shuffle bots for random turn order
+      const turnOrder = [...currentBots].sort(() => Math.random() - 0.5);
+      const botMap = new Map(currentBots.map(b => [b.id, b]));
       
-      // Temporary tracking for daily accumulators
       let todayNewWealth = 0;
       let todayChestRevenue = 0;
       let todayInvestedMedals = 0;
 
-      // Map for fast lookup
-      const botMap = new Map(currentBots.map(b => [b.id, b]));
+      addLog('INFO', '--- Bot Turns Start ---');
 
-      for (const action of executionOrder) {
-        const bot = botMap.get(action.botId);
-        if (!bot) continue;
-
+      for (const botRef of turnOrder) {
+        // Always get fresh bot state from map (though in this local scope botRef is stale, we use map)
+        const bot = botMap.get(botRef.id)!;
+        
+        // Pass CURRENT state (including price changes from previous bots in this loop)
+        const action = await generateSingleBotDecision(day, currentState, bot, Array.from(botMap.values()));
+        
         let actionLog = "";
         
+        // --- Execute Decision ---
+
         // 4.1 Salvage (Emergency)
         if (action.salvageCount > 0 && bot.equipmentCount >= action.salvageCount) {
-           const salvageReturn = action.salvageCount * WEALTH_PER_ITEM * 0.5; // 50% return price, usually 0 if item has no base cost defined, but we return LvMON
-           // NOTE: Design doc says "Return = salvageCount * WEALTH_PER_ITEM * 0.5". 
-           // Wait, wealth per item is wealth value. Craft cost is 300. 
-           // Let's assume salvage gives back 50% of CRAFT COST per item.
            const refund = action.salvageCount * CRAFT_COST * 0.5;
-           
            bot.lvMON += refund;
            bot.equipmentCount -= action.salvageCount;
            bot.wealth -= action.salvageCount * WEALTH_PER_ITEM;
@@ -202,25 +205,8 @@ const App: React.FC = () => {
           currentState.totalWealth += wealthGain;
           todayNewWealth += wealthGain;
           
-          // Reservoir Logic
           currentState.reservoirLvMON += cost * RESERVOIR_CONTRIBUTION_RATE;
-
-          // Convert Wealth to Chests automatically (100 wealth = 1 chest)
-          // Simplified: The bot just gets chests based on total wealth? 
-          // Doc says: "Equipment automatically converts to chests: every 100 wealth = 1 chest"
-          // This implies continuous accumulation. Let's recalculate total potential chests and diff it.
-          // Or simpler: Just give chests based on wealth added *now*?
-          // Design: "Bot daily automatically obtains chests = floor(wealth / 10)" - Wait, the doc says "floor(wealth/10)" in 1.3, but "100 wealth = 1 chest" in 1.2.
-          // Let's use 1.2 for generation: 100 Wealth = 1 Chest available to open.
-          // Actually, let's implement: Bot gets chests equal to floor(bot.wealth / 100).
-          // To prevent double counting, we treat 'chests' as an inventory item that is replenished based on wealth?
-          // Let's stick to: When you craft, you gain wealth. 
-          // Let's just grant chests based on wealth gained this turn for simplicity, 
-          // or stick to the Doc 1.3: "Bot daily automatically obtains chests = floor(wealth / 10)"
-          // Let's use the Doc 1.3 rule at the start of next turn? 
-          // No, let's just update `chests` here based on current wealth.
           bot.chests = Math.floor(bot.wealth / 100); 
-
           actionLog += `Crafted ${actualCraft}. `;
         }
 
@@ -230,12 +216,8 @@ const App: React.FC = () => {
         if (actualOpen > 0) {
           const cost = actualOpen * CHEST_OPEN_COST;
           bot.lvMON -= cost;
-          bot.chests -= actualOpen; // Consumed? Or is chest a persistent generator? 
-          // "Opening chest consumes it" is standard. But if chest is based on wealth...
-          // Let's assume opening consumes the *action* of opening, but wealth remains.
-          // So we just check if they have funds. The 'chest' count limits how many they can open per day?
-          // Let's assume: Wealth grants a 'allowance' of chests per day.
-          
+          bot.chests -= actualOpen; 
+          bot.chestsOpenedToday += actualOpen;
           todayChestRevenue += cost;
           
           let medalsGained = 0;
@@ -249,7 +231,7 @@ const App: React.FC = () => {
         // 4.4 Invest Medals
         if (action.investMedals && bot.medals > 0) {
           const investAmount = bot.medals;
-          bot.investedMedals += investAmount; // For tomorrow's reward
+          bot.investedMedals += investAmount; 
           todayInvestedMedals += investAmount;
           bot.medals = 0;
           actionLog += `Invested ${investAmount} medals. `;
@@ -266,27 +248,43 @@ const App: React.FC = () => {
            }
         }
 
-        // 4.6 Sell MEME
-        if (action.sellMemePercent > 0 && bot.meme > 0) {
-           const amountIn = Math.floor(bot.meme * action.sellMemePercent);
+        // 4.6 Sell / Stake (Normalized)
+        const availableMeme = bot.meme;
+        let sellPct = action.sellMemePercent;
+        let stakePct = action.stakeMemePercent;
+
+        if (sellPct + stakePct > 1.0) {
+            const factor = sellPct + stakePct;
+            sellPct = sellPct / factor;
+            stakePct = stakePct / factor;
+        }
+
+        const plannedSellAmount = Math.floor(availableMeme * sellPct);
+        const plannedStakeAmount = Math.floor(availableMeme * stakePct);
+
+        // Sell
+        if (plannedSellAmount > 0) {
+           const amountIn = Math.min(bot.meme, plannedSellAmount);
            if (amountIn > 0) {
              const amountOut = getAmountOut(amountIn, currentState.reserveMEME, currentState.reserveLvMON);
              
-             // Update Bot
              bot.meme -= amountIn;
              bot.lvMON += amountOut;
              
-             // Update AMM
              currentState.reserveMEME += amountIn;
              currentState.reserveLvMON -= amountOut;
+             
+             // UPDATE MARKET PRICE IMMEDIATELY FOR NEXT BOT
+             currentState.marketPrice = getSpotPrice(currentState.reserveLvMON, currentState.reserveMEME);
+             const prevPrice = globalState.marketPrice; 
              
              actionLog += `Sold ${formatCurrency(amountIn)} MEME. `;
            }
         }
 
-        // 4.7 Stake MEME
-        if (action.stakeMemePercent > 0 && bot.meme > 0) {
-           const amount = Math.floor(bot.meme * action.stakeMemePercent);
+        // Stake
+        if (plannedStakeAmount > 0) {
+           const amount = Math.min(bot.meme, plannedStakeAmount);
            if (amount > 0) {
              bot.meme -= amount;
              bot.stakedMeme += amount;
@@ -295,11 +293,13 @@ const App: React.FC = () => {
            }
         }
 
-        // Log Update
-        bot.lastActionLog = actionLog || "Idle";
+        bot.lastActionLog = `[D${day}] ${actionLog || "Idle"}`;
         bot.lastDecisionRationale = action.rationale;
+
+        // Update Maps & State incrementally
+        botMap.set(bot.id, bot);
         
-        // Save for History Export
+        // Record history
         setBotHistory(prev => [...prev, {
             day,
             botId: bot.id,
@@ -311,16 +311,13 @@ const App: React.FC = () => {
             staked: bot.stakedMeme,
             wealth: bot.wealth
         }]);
-        
-        // Update Map
-        botMap.set(bot.id, bot);
-      } // End Bot Loop
 
-      // Update Bots State from Map
+      } // End Sequential Loop
+
       currentBots = Array.from(botMap.values());
+      setBots(currentBots); // Bulk update bots after all turns
 
       // 5. System Buyback
-      // Calculate Budget
       const buybackRate = calculateBuybackRate(todayNewWealth);
       const budgetFromReservoir = currentState.reservoirLvMON * buybackRate;
       const budgetFromChests = todayChestRevenue;
@@ -330,23 +327,24 @@ const App: React.FC = () => {
       let distributedStaking = 0;
 
       if (totalBuybackBudget > 0 && currentState.reserveMEME > 1000) {
-         // Buy MEME from AMM using Budget
+         addLog('MARKET', `Buyback Analysis:
+          Reservoir (${formatCurrency(currentState.reservoirLvMON)}) * Rate (${(buybackRate * 100).toFixed(2)}%) = ${formatCurrency(budgetFromReservoir)}
+          + Chest Revenue = ${formatCurrency(budgetFromChests)}
+          = Total Budget ${formatCurrency(totalBuybackBudget)}`);
+
          const amountInLvMON = totalBuybackBudget;
          const memeBought = getAmountOut(amountInLvMON, currentState.reserveLvMON, currentState.reserveMEME);
          
-         // Update AMM
          currentState.reserveLvMON += amountInLvMON;
          currentState.reserveMEME -= memeBought;
-         currentState.reservoirLvMON -= budgetFromReservoir; // Deduct used budget
+         currentState.reservoirLvMON -= budgetFromReservoir;
 
-         // Distribution
          const toStakers = memeBought * STAKING_DIVIDEND_RATE;
          const toBurn = memeBought - toStakers;
          
          burnedMEME = toBurn;
          distributedStaking = toStakers;
 
-         // Distribute to Stakers immediately
          if (currentState.totalStakedMeme > 0) {
             currentBots = currentBots.map(bot => {
               if (bot.stakedMeme > 0) {
@@ -356,23 +354,23 @@ const App: React.FC = () => {
               return bot;
             });
          } else {
-             // If no stakers, burn it all
              burnedMEME += toStakers; 
          }
 
-         addLog('MARKET', `Buyback: Spent ${formatCurrency(totalBuybackBudget)} LvMON. Bought ${formatCurrency(memeBought)} MEME. Burned ${formatCurrency(burnedMEME)}. Dist. ${formatCurrency(distributedStaking)}.`);
+         addLog('MARKET', `Buyback Execution: Bought ${formatCurrency(memeBought)} MEME. Burned ${formatCurrency(burnedMEME)}. Distributed ${formatCurrency(distributedStaking)}.`);
+      } else {
+        addLog('INFO', `Buyback skipped (Budget: ${formatCurrency(totalBuybackBudget)})`);
       }
 
-      // 6. Update Global State
+      // 6. Finalize Day
       const currentPrice = getSpotPrice(currentState.reserveLvMON, currentState.reserveMEME);
-      const prevPrice = globalState.marketPrice;
+      const prevPrice = globalState.marketPrice; // Price at START of day
       
       currentState.marketPrice = currentPrice;
       currentState.priceTrend = currentPrice > prevPrice ? PriceTrend.Up : (currentPrice < prevPrice ? PriceTrend.Down : PriceTrend.Stable);
-      currentState.dailyNewWealth = todayNewWealth; // Used for NEXT day's buyback calc
-      currentState.totalMedalsInPool = todayInvestedMedals; // Set pool for TOMORROW
+      currentState.dailyNewWealth = todayNewWealth; 
+      currentState.totalMedalsInPool = todayInvestedMedals; 
       
-      // Update History
       const newHistoryItem: DailyStat = {
         day: day + 1,
         price: currentPrice,
@@ -401,13 +399,13 @@ const App: React.FC = () => {
     if (simulationRunning && !processing) {
       interval = setInterval(() => {
         advanceDay();
-      }, 2000); // 2 seconds per day
+      }, 500); // Faster polling since async operations take time
     }
     return () => {
       if (interval) clearInterval(interval);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [simulationRunning, processing]); // Depend on processing to avoid stacking
+  }, [simulationRunning, processing]); 
 
   const exportToExcel = () => {
     const wb = XLSX.utils.book_new();
@@ -460,7 +458,7 @@ const App: React.FC = () => {
           <h1 className="text-3xl font-bold bg-gradient-to-r from-blue-400 to-purple-400 bg-clip-text text-transparent">
             MMO Economy Simulator
           </h1>
-          <p className="text-slate-400 text-sm mt-1">AI-Driven Autonomous Agent Economy</p>
+          <p className="text-slate-400 text-sm mt-1">AI-Driven Autonomous Agent Economy (Sequential Turn-Based)</p>
         </div>
         <div className="flex gap-3">
            <button 
@@ -544,6 +542,7 @@ const App: React.FC = () => {
                  ${log.type === 'INFO' ? 'text-blue-300 font-bold mt-2' : ''}
                  ${log.type === 'MARKET' ? 'text-amber-300' : ''}
                  ${log.type === 'ERROR' ? 'text-red-500' : ''}
+                 whitespace-pre-line
                `}>
                  <span className="opacity-50 mr-2">[D{log.day}]</span>
                  {log.message}
@@ -562,6 +561,3 @@ const App: React.FC = () => {
 };
 
 export default App;
-
-const root = createRoot(document.getElementById('root')!);
-root.render(<App />);
