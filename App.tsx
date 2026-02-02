@@ -1,8 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { createRoot } from 'react-dom/client';
-import { 
-  LineChart, Line, XAxis, YAxis, Tooltip, CartesianGrid, ResponsiveContainer, AreaChart, Area, BarChart, Bar 
-} from 'recharts';
+import 
+  { LineChart, Line, XAxis, YAxis, Tooltip, CartesianGrid, ResponsiveContainer, AreaChart, Area, BarChart, Bar } 
+from 'recharts';
 import * as XLSX from 'xlsx';
 import { 
   Bot, BotAction, GlobalState, PriceTrend, LogEntry, DailyStat, BotPersonality
@@ -27,6 +26,7 @@ const App: React.FC = () => {
   const [day, setDay] = useState<number>(1);
   const [simulationRunning, setSimulationRunning] = useState<boolean>(false);
   const [processing, setProcessing] = useState<boolean>(false);
+  const [activeBotId, setActiveBotId] = useState<number | null>(null);
   
   const [bots, setBots] = useState<Bot[]>([]);
   const [globalState, setGlobalState] = useState<GlobalState>({
@@ -164,6 +164,9 @@ const App: React.FC = () => {
       const turnOrder = [...currentBots].sort(() => Math.random() - 0.5);
       const botMap = new Map(currentBots.map(b => [b.id, b]));
       
+      // Track logs for export
+      const turnLogs = new Map<number, { log: string, rationale: string }>();
+
       let todayNewWealth = 0;
       let todayChestRevenue = 0;
       let todayInvestedMedals = 0;
@@ -171,6 +174,9 @@ const App: React.FC = () => {
       addLog('INFO', '--- Bot Turns Start ---');
 
       for (const botRef of turnOrder) {
+        // Highlight current bot
+        setActiveBotId(botRef.id);
+
         // Always get fresh bot state from map (though in this local scope botRef is stale, we use map)
         const bot = botMap.get(botRef.id)!;
         
@@ -295,24 +301,15 @@ const App: React.FC = () => {
 
         bot.lastActionLog = `[D${day}] ${actionLog || "Idle"}`;
         bot.lastDecisionRationale = action.rationale;
+        
+        turnLogs.set(bot.id, { log: actionLog, rationale: action.rationale });
 
         // Update Maps & State incrementally
         botMap.set(bot.id, bot);
         
-        // Record history
-        setBotHistory(prev => [...prev, {
-            day,
-            botId: bot.id,
-            personality: bot.personality,
-            actionLog,
-            rationale: action.rationale,
-            lvMON: bot.lvMON,
-            meme: bot.meme,
-            staked: bot.stakedMeme,
-            wealth: bot.wealth
-        }]);
-
       } // End Sequential Loop
+
+      setActiveBotId(null); // Clear active status
 
       currentBots = Array.from(botMap.values());
       setBots(currentBots); // Bulk update bots after all turns
@@ -384,9 +381,38 @@ const App: React.FC = () => {
       setHistory(prev => [...prev, newHistoryItem]);
       setDay(d => d + 1);
 
+      // --- RECORD BOT HISTORY FOR EXPORT ---
+      // We do this at the very end to capture final balances (after buyback dividends)
+      const dailyBotRecords = currentBots.map(bot => {
+         const turnLog = turnLogs.get(bot.id) || { log: '-', rationale: '-' };
+         return {
+            Day: day,
+            BotID: bot.id,
+            Personality: bot.personality,
+            Strategy_Rationale: turnLog.rationale,
+            Action_Log: turnLog.log,
+            LvMON: bot.lvMON,
+            PnL: bot.lvMON - bot.initialLvMON,
+            MEME: bot.meme,
+            Staked_MEME: bot.stakedMeme,
+            Wealth: bot.wealth,
+            Chests_Total: bot.chests,
+            Chests_Opened_Today: bot.chestsOpenedToday,
+            Medals_Held: bot.medals,
+            Medals_Invested: bot.investedMedals,
+            // Global Context
+            Global_Price: currentPrice,
+            Global_Reservoir: currentState.reservoirLvMON,
+            Global_Total_Wealth: currentState.totalWealth,
+            Global_Total_Staked: currentState.totalStakedMeme
+         };
+      });
+      setBotHistory(prev => [...prev, ...dailyBotRecords]);
+
     } catch (e) {
       console.error(e);
       addLog('ERROR', 'Simulation step failed');
+      setActiveBotId(null);
     } finally {
       setProcessing(false);
     }
@@ -449,6 +475,7 @@ const App: React.FC = () => {
     });
     setLogs([]);
     setBotHistory([]);
+    setActiveBotId(null);
   };
 
   return (
@@ -554,7 +581,7 @@ const App: React.FC = () => {
 
       <div className="mb-8">
         <h3 className="text-xl font-bold mb-4">Live Bot Status</h3>
-        <BotTable bots={bots} />
+        <BotTable bots={bots} activeBotId={activeBotId} />
       </div>
     </div>
   );
