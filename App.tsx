@@ -1,0 +1,567 @@
+import React, { useState, useEffect, useRef } from 'react';
+import { createRoot } from 'react-dom/client';
+import { 
+  LineChart, Line, XAxis, YAxis, Tooltip, CartesianGrid, ResponsiveContainer, AreaChart, Area, BarChart, Bar 
+} from 'recharts';
+import * as XLSX from 'xlsx';
+import { 
+  Bot, BotAction, GlobalState, PriceTrend, LogEntry, DailyStat, BotPersonality
+} from './types';
+import { 
+  INITIAL_RESERVE_LVMON, INITIAL_RESERVE_MEME, PERSONALITY_DISTRIBUTION, PERSONALITY_CONFIG,
+  CRAFT_COST, WEALTH_PER_ITEM, RESERVOIR_CONTRIBUTION_RATE, CHEST_OPEN_COST,
+  DAILY_MEME_REWARD, TAX_RATE, STAKING_DIVIDEND_RATE
+} from './constants';
+import { 
+  randomInt, getAmountOut, getSpotPrice, calculateBuybackRate, calculateNewChests, formatCurrency 
+} from './utils';
+import { generateBotDecisions } from './services/geminiService';
+import InfoCard from './components/InfoCard';
+import BotTable from './components/BotTable';
+import { 
+  Coins, TrendingUp, Pickaxe, Landmark, Play, Pause, Save, RotateCcw, Activity 
+} from 'lucide-react';
+
+const App: React.FC = () => {
+  // --- State ---
+  const [day, setDay] = useState<number>(1);
+  const [simulationRunning, setSimulationRunning] = useState<boolean>(false);
+  const [processing, setProcessing] = useState<boolean>(false);
+  
+  const [bots, setBots] = useState<Bot[]>([]);
+  const [globalState, setGlobalState] = useState<GlobalState>({
+    day: 1,
+    reserveMEME: INITIAL_RESERVE_MEME,
+    reserveLvMON: INITIAL_RESERVE_LVMON,
+    reservoirLvMON: 0,
+    totalWealth: 0,
+    totalStakedMeme: 0,
+    totalMedalsInPool: 0,
+    dailyChestRevenue: 0,
+    dailyNewWealth: 0,
+    dailyTaxPool: 0,
+    marketPrice: INITIAL_RESERVE_LVMON / INITIAL_RESERVE_MEME,
+    priceTrend: PriceTrend.Stable,
+    buybackHistory: []
+  });
+
+  const [logs, setLogs] = useState<LogEntry[]>([]);
+  const [history, setHistory] = useState<DailyStat[]>([]);
+  const [botHistory, setBotHistory] = useState<any[]>([]); // For Excel export
+
+  const scrollRef = useRef<HTMLDivElement>(null);
+
+  // --- Initialization ---
+  useEffect(() => {
+    initializeBots();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  useEffect(() => {
+    if (scrollRef.current) {
+      scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
+    }
+  }, [logs]);
+
+  const addLog = (type: LogEntry['type'], message: string) => {
+    setLogs(prev => [...prev, { day, type, message }]);
+  };
+
+  const initializeBots = () => {
+    const newBots: Bot[] = PERSONALITY_DISTRIBUTION.map((personality, index) => {
+      const config = PERSONALITY_CONFIG[personality];
+      return {
+        id: index,
+        personality,
+        lvMON: randomInt(config.minStart, config.maxStart),
+        meme: 0,
+        stakedMeme: 0,
+        medals: 0,
+        investedMedals: 0,
+        wealth: 0,
+        chests: 0,
+        equipmentCount: 0,
+        lastActionLog: "Initialized"
+      };
+    });
+    setBots(newBots);
+    setLogs([{ day: 0, type: 'INFO', message: 'Simulation Initialized' }]);
+    
+    // Initial Chart Point
+    setHistory([{
+      day: 1,
+      price: INITIAL_RESERVE_LVMON / INITIAL_RESERVE_MEME,
+      wealth: 0,
+      reservoir: 0,
+      staked: 0
+    }]);
+  };
+
+  // --- Core Simulation Logic ---
+
+  const advanceDay = async () => {
+    if (processing) return;
+    setProcessing(true);
+
+    try {
+      addLog('INFO', `--- Day ${day} Start ---`);
+
+      // 1. AI Decision Phase
+      addLog('INFO', 'AI generating decisions...');
+      const decisions = await generateBotDecisions(day, globalState, bots);
+      
+      let currentBots = [...bots];
+      let currentState = { ...globalState };
+
+      // 2. Morning Rewards (Based on Yesterday's Pool)
+      // Total Medals from Yesterday
+      const poolTotal = currentState.totalMedalsInPool; 
+      let distributedRewardTotal = 0;
+      let taxCollected = 0;
+
+      if (poolTotal > 0) {
+        currentBots = currentBots.map(bot => {
+          if (bot.investedMedals > 0) {
+            const share = bot.investedMedals / poolTotal;
+            const rawReward = DAILY_MEME_REWARD * share;
+            const tax = rawReward * TAX_RATE;
+            const netReward = rawReward - tax;
+            
+            taxCollected += tax;
+            distributedRewardTotal += netReward;
+            
+            return {
+              ...bot,
+              meme: bot.meme + netReward,
+              investedMedals: 0 // Reset after payout
+            };
+          }
+          return bot;
+        });
+        addLog('INFO', `Distributed ${formatCurrency(distributedRewardTotal)} MEME. Tax collected: ${formatCurrency(taxCollected)} MEME.`);
+      } else {
+        addLog('INFO', 'No medals in pool yesterday. No rewards distributed.');
+      }
+
+      // 3. Tax Redistribution (Based on Wealth)
+      if (taxCollected > 0 && currentState.totalWealth > 0) {
+         currentBots = currentBots.map(bot => {
+           if (bot.wealth > 0) {
+             const share = bot.wealth / currentState.totalWealth;
+             const dividend = taxCollected * share;
+             return { ...bot, meme: bot.meme + dividend };
+           }
+           return bot;
+         });
+         addLog('INFO', `Redistributed tax dividends to wealthy bots.`);
+      }
+
+      // 4. Execution Phase (Shuffle for fairness)
+      const executionOrder = decisions.sort(() => Math.random() - 0.5);
+      
+      // Temporary tracking for daily accumulators
+      let todayNewWealth = 0;
+      let todayChestRevenue = 0;
+      let todayInvestedMedals = 0;
+
+      // Map for fast lookup
+      const botMap = new Map(currentBots.map(b => [b.id, b]));
+
+      for (const action of executionOrder) {
+        const bot = botMap.get(action.botId);
+        if (!bot) continue;
+
+        let actionLog = "";
+        
+        // 4.1 Salvage (Emergency)
+        if (action.salvageCount > 0 && bot.equipmentCount >= action.salvageCount) {
+           const salvageReturn = action.salvageCount * WEALTH_PER_ITEM * 0.5; // 50% return price, usually 0 if item has no base cost defined, but we return LvMON
+           // NOTE: Design doc says "Return = salvageCount * WEALTH_PER_ITEM * 0.5". 
+           // Wait, wealth per item is wealth value. Craft cost is 300. 
+           // Let's assume salvage gives back 50% of CRAFT COST per item.
+           const refund = action.salvageCount * CRAFT_COST * 0.5;
+           
+           bot.lvMON += refund;
+           bot.equipmentCount -= action.salvageCount;
+           bot.wealth -= action.salvageCount * WEALTH_PER_ITEM;
+           currentState.totalWealth -= action.salvageCount * WEALTH_PER_ITEM;
+           todayNewWealth -= action.salvageCount * WEALTH_PER_ITEM;
+           actionLog += `Salvaged ${action.salvageCount}. `;
+        }
+
+        // 4.2 Craft
+        const maxCraft = Math.floor(bot.lvMON / CRAFT_COST);
+        const actualCraft = Math.min(action.craftCount, maxCraft);
+        if (actualCraft > 0) {
+          const cost = actualCraft * CRAFT_COST;
+          bot.lvMON -= cost;
+          bot.equipmentCount += actualCraft;
+          
+          const wealthGain = actualCraft * WEALTH_PER_ITEM;
+          bot.wealth += wealthGain;
+          currentState.totalWealth += wealthGain;
+          todayNewWealth += wealthGain;
+          
+          // Reservoir Logic
+          currentState.reservoirLvMON += cost * RESERVOIR_CONTRIBUTION_RATE;
+
+          // Convert Wealth to Chests automatically (100 wealth = 1 chest)
+          // Simplified: The bot just gets chests based on total wealth? 
+          // Doc says: "Equipment automatically converts to chests: every 100 wealth = 1 chest"
+          // This implies continuous accumulation. Let's recalculate total potential chests and diff it.
+          // Or simpler: Just give chests based on wealth added *now*?
+          // Design: "Bot daily automatically obtains chests = floor(wealth / 10)" - Wait, the doc says "floor(wealth/10)" in 1.3, but "100 wealth = 1 chest" in 1.2.
+          // Let's use 1.2 for generation: 100 Wealth = 1 Chest available to open.
+          // Actually, let's implement: Bot gets chests equal to floor(bot.wealth / 100).
+          // To prevent double counting, we treat 'chests' as an inventory item that is replenished based on wealth?
+          // Let's stick to: When you craft, you gain wealth. 
+          // Let's just grant chests based on wealth gained this turn for simplicity, 
+          // or stick to the Doc 1.3: "Bot daily automatically obtains chests = floor(wealth / 10)"
+          // Let's use the Doc 1.3 rule at the start of next turn? 
+          // No, let's just update `chests` here based on current wealth.
+          bot.chests = Math.floor(bot.wealth / 100); 
+
+          actionLog += `Crafted ${actualCraft}. `;
+        }
+
+        // 4.3 Open Chests
+        const maxOpen = Math.min(bot.chests, Math.floor(bot.lvMON / CHEST_OPEN_COST));
+        const actualOpen = Math.min(action.openChests, maxOpen);
+        if (actualOpen > 0) {
+          const cost = actualOpen * CHEST_OPEN_COST;
+          bot.lvMON -= cost;
+          bot.chests -= actualOpen; // Consumed? Or is chest a persistent generator? 
+          // "Opening chest consumes it" is standard. But if chest is based on wealth...
+          // Let's assume opening consumes the *action* of opening, but wealth remains.
+          // So we just check if they have funds. The 'chest' count limits how many they can open per day?
+          // Let's assume: Wealth grants a 'allowance' of chests per day.
+          
+          todayChestRevenue += cost;
+          
+          let medalsGained = 0;
+          for(let i=0; i<actualOpen; i++) {
+            medalsGained += randomInt(5, 15);
+          }
+          bot.medals += medalsGained;
+          actionLog += `Opened ${actualOpen} chests (+${medalsGained} medals). `;
+        }
+
+        // 4.4 Invest Medals
+        if (action.investMedals && bot.medals > 0) {
+          const investAmount = bot.medals;
+          bot.investedMedals += investAmount; // For tomorrow's reward
+          todayInvestedMedals += investAmount;
+          bot.medals = 0;
+          actionLog += `Invested ${investAmount} medals. `;
+        }
+
+        // 4.5 Unstake
+        if (action.unstakeMemePercent > 0 && bot.stakedMeme > 0) {
+           const amount = Math.floor(bot.stakedMeme * action.unstakeMemePercent);
+           if (amount > 0) {
+             bot.stakedMeme -= amount;
+             bot.meme += amount;
+             currentState.totalStakedMeme -= amount;
+             actionLog += `Unstaked ${formatCurrency(amount)} MEME. `;
+           }
+        }
+
+        // 4.6 Sell MEME
+        if (action.sellMemePercent > 0 && bot.meme > 0) {
+           const amountIn = Math.floor(bot.meme * action.sellMemePercent);
+           if (amountIn > 0) {
+             const amountOut = getAmountOut(amountIn, currentState.reserveMEME, currentState.reserveLvMON);
+             
+             // Update Bot
+             bot.meme -= amountIn;
+             bot.lvMON += amountOut;
+             
+             // Update AMM
+             currentState.reserveMEME += amountIn;
+             currentState.reserveLvMON -= amountOut;
+             
+             actionLog += `Sold ${formatCurrency(amountIn)} MEME. `;
+           }
+        }
+
+        // 4.7 Stake MEME
+        if (action.stakeMemePercent > 0 && bot.meme > 0) {
+           const amount = Math.floor(bot.meme * action.stakeMemePercent);
+           if (amount > 0) {
+             bot.meme -= amount;
+             bot.stakedMeme += amount;
+             currentState.totalStakedMeme += amount;
+             actionLog += `Staked ${formatCurrency(amount)} MEME. `;
+           }
+        }
+
+        // Log Update
+        bot.lastActionLog = actionLog || "Idle";
+        bot.lastDecisionRationale = action.rationale;
+        
+        // Save for History Export
+        setBotHistory(prev => [...prev, {
+            day,
+            botId: bot.id,
+            personality: bot.personality,
+            actionLog,
+            rationale: action.rationale,
+            lvMON: bot.lvMON,
+            meme: bot.meme,
+            staked: bot.stakedMeme,
+            wealth: bot.wealth
+        }]);
+        
+        // Update Map
+        botMap.set(bot.id, bot);
+      } // End Bot Loop
+
+      // Update Bots State from Map
+      currentBots = Array.from(botMap.values());
+
+      // 5. System Buyback
+      // Calculate Budget
+      const buybackRate = calculateBuybackRate(todayNewWealth);
+      const budgetFromReservoir = currentState.reservoirLvMON * buybackRate;
+      const budgetFromChests = todayChestRevenue;
+      const totalBuybackBudget = budgetFromReservoir + budgetFromChests;
+
+      let burnedMEME = 0;
+      let distributedStaking = 0;
+
+      if (totalBuybackBudget > 0 && currentState.reserveMEME > 1000) {
+         // Buy MEME from AMM using Budget
+         const amountInLvMON = totalBuybackBudget;
+         const memeBought = getAmountOut(amountInLvMON, currentState.reserveLvMON, currentState.reserveMEME);
+         
+         // Update AMM
+         currentState.reserveLvMON += amountInLvMON;
+         currentState.reserveMEME -= memeBought;
+         currentState.reservoirLvMON -= budgetFromReservoir; // Deduct used budget
+
+         // Distribution
+         const toStakers = memeBought * STAKING_DIVIDEND_RATE;
+         const toBurn = memeBought - toStakers;
+         
+         burnedMEME = toBurn;
+         distributedStaking = toStakers;
+
+         // Distribute to Stakers immediately
+         if (currentState.totalStakedMeme > 0) {
+            currentBots = currentBots.map(bot => {
+              if (bot.stakedMeme > 0) {
+                 const share = bot.stakedMeme / currentState.totalStakedMeme;
+                 return { ...bot, meme: bot.meme + (toStakers * share) };
+              }
+              return bot;
+            });
+         } else {
+             // If no stakers, burn it all
+             burnedMEME += toStakers; 
+         }
+
+         addLog('MARKET', `Buyback: Spent ${formatCurrency(totalBuybackBudget)} LvMON. Bought ${formatCurrency(memeBought)} MEME. Burned ${formatCurrency(burnedMEME)}. Dist. ${formatCurrency(distributedStaking)}.`);
+      }
+
+      // 6. Update Global State
+      const currentPrice = getSpotPrice(currentState.reserveLvMON, currentState.reserveMEME);
+      const prevPrice = globalState.marketPrice;
+      
+      currentState.marketPrice = currentPrice;
+      currentState.priceTrend = currentPrice > prevPrice ? PriceTrend.Up : (currentPrice < prevPrice ? PriceTrend.Down : PriceTrend.Stable);
+      currentState.dailyNewWealth = todayNewWealth; // Used for NEXT day's buyback calc
+      currentState.totalMedalsInPool = todayInvestedMedals; // Set pool for TOMORROW
+      
+      // Update History
+      const newHistoryItem: DailyStat = {
+        day: day + 1,
+        price: currentPrice,
+        wealth: currentState.totalWealth,
+        reservoir: currentState.reservoirLvMON,
+        staked: currentState.totalStakedMeme
+      };
+
+      setBots(currentBots);
+      setGlobalState({ ...currentState, day: day + 1 });
+      setHistory(prev => [...prev, newHistoryItem]);
+      setDay(d => d + 1);
+
+    } catch (e) {
+      console.error(e);
+      addLog('ERROR', 'Simulation step failed');
+    } finally {
+      setProcessing(false);
+    }
+  };
+
+  // --- Controls ---
+
+  useEffect(() => {
+    let interval: ReturnType<typeof setInterval> | undefined;
+    if (simulationRunning && !processing) {
+      interval = setInterval(() => {
+        advanceDay();
+      }, 2000); // 2 seconds per day
+    }
+    return () => {
+      if (interval) clearInterval(interval);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [simulationRunning, processing]); // Depend on processing to avoid stacking
+
+  const exportToExcel = () => {
+    const wb = XLSX.utils.book_new();
+    
+    // Global Sheet
+    const globalData = history.map(h => ({
+      Day: h.day,
+      Price: h.price,
+      TotalWealth: h.wealth,
+      Reservoir: h.reservoir,
+      TotalStaked: h.staked
+    }));
+    const wsGlobal = XLSX.utils.json_to_sheet(globalData);
+    XLSX.utils.book_append_sheet(wb, wsGlobal, "Global Overview");
+
+    // Bot Sheet
+    const wsBots = XLSX.utils.json_to_sheet(botHistory);
+    XLSX.utils.book_append_sheet(wb, wsBots, "Bot Logs");
+
+    XLSX.writeFile(wb, "MMO_Economy_Sim.xlsx");
+  };
+
+  const resetSim = () => {
+    setSimulationRunning(false);
+    setDay(1);
+    initializeBots();
+    setGlobalState({
+      day: 1,
+      reserveMEME: INITIAL_RESERVE_MEME,
+      reserveLvMON: INITIAL_RESERVE_LVMON,
+      reservoirLvMON: 0,
+      totalWealth: 0,
+      totalStakedMeme: 0,
+      totalMedalsInPool: 0,
+      dailyChestRevenue: 0,
+      dailyNewWealth: 0,
+      dailyTaxPool: 0,
+      marketPrice: INITIAL_RESERVE_LVMON / INITIAL_RESERVE_MEME,
+      priceTrend: PriceTrend.Stable,
+      buybackHistory: []
+    });
+    setLogs([]);
+    setBotHistory([]);
+  };
+
+  return (
+    <div className="min-h-screen bg-slate-900 text-slate-100 p-6 font-sans">
+      <header className="flex justify-between items-center mb-8 border-b border-slate-700 pb-4">
+        <div>
+          <h1 className="text-3xl font-bold bg-gradient-to-r from-blue-400 to-purple-400 bg-clip-text text-transparent">
+            MMO Economy Simulator
+          </h1>
+          <p className="text-slate-400 text-sm mt-1">AI-Driven Autonomous Agent Economy</p>
+        </div>
+        <div className="flex gap-3">
+           <button 
+             onClick={() => setSimulationRunning(!simulationRunning)}
+             className={`flex items-center gap-2 px-4 py-2 rounded-lg font-bold transition-all ${simulationRunning ? 'bg-amber-500 hover:bg-amber-600' : 'bg-emerald-500 hover:bg-emerald-600'}`}
+           >
+             {simulationRunning ? <Pause size={18} /> : <Play size={18} />}
+             {simulationRunning ? "Pause" : "Start"}
+           </button>
+           <button onClick={() => advanceDay()} disabled={simulationRunning || processing} className="px-4 py-2 bg-blue-600 hover:bg-blue-700 rounded-lg font-medium disabled:opacity-50">
+             Next Day
+           </button>
+           <button onClick={resetSim} className="p-2 bg-slate-700 hover:bg-slate-600 rounded-lg text-slate-300">
+             <RotateCcw size={20} />
+           </button>
+           <button onClick={exportToExcel} className="flex items-center gap-2 px-4 py-2 bg-slate-700 hover:bg-slate-600 rounded-lg font-medium">
+             <Save size={18} /> Export
+           </button>
+        </div>
+      </header>
+
+      <div className="grid grid-cols-1 lg:grid-cols-4 gap-6 mb-8">
+        <InfoCard 
+          title="MEME Price" 
+          value={formatCurrency(globalState.marketPrice)} 
+          subValue={`Trend: ${globalState.priceTrend}`}
+          icon={<TrendingUp size={20} />} 
+          color={globalState.priceTrend === 'Up' ? 'green' : (globalState.priceTrend === 'Down' ? 'red' : 'blue')}
+        />
+        <InfoCard 
+          title="Reservoir" 
+          value={formatCurrency(globalState.reservoirLvMON)} 
+          subValue="LvMON for Buyback"
+          icon={<Landmark size={20} />} 
+          color="purple"
+        />
+        <InfoCard 
+          title="Total Wealth" 
+          value={formatCurrency(globalState.totalWealth)} 
+          subValue="All Bots"
+          icon={<Pickaxe size={20} />} 
+          color="yellow"
+        />
+        <InfoCard 
+          title="Staked MEME" 
+          value={formatCurrency(globalState.totalStakedMeme)} 
+          subValue={`${((globalState.totalStakedMeme/globalState.reserveMEME)*100).toFixed(1)}% of Supply`}
+          icon={<Coins size={20} />} 
+          color="blue"
+        />
+      </div>
+
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 mb-8 h-[400px]">
+        {/* Charts */}
+        <div className="lg:col-span-2 bg-slate-800/50 border border-slate-700 rounded-xl p-4">
+          <h3 className="text-lg font-medium mb-4 flex items-center gap-2">
+            <Activity size={18} /> Market History
+          </h3>
+          <ResponsiveContainer width="100%" height="90%">
+            <LineChart data={history}>
+              <CartesianGrid strokeDasharray="3 3" stroke="#374151" />
+              <XAxis dataKey="day" stroke="#9ca3af" />
+              <YAxis yAxisId="left" stroke="#34d399" domain={['auto', 'auto']} />
+              <YAxis yAxisId="right" orientation="right" stroke="#c084fc" />
+              <Tooltip 
+                contentStyle={{ backgroundColor: '#1f2937', border: '1px solid #374151' }}
+              />
+              <Line yAxisId="left" type="monotone" dataKey="price" stroke="#34d399" dot={false} strokeWidth={2} name="Price" />
+              <Line yAxisId="right" type="monotone" dataKey="reservoir" stroke="#c084fc" dot={false} strokeWidth={2} name="Reservoir" />
+            </LineChart>
+          </ResponsiveContainer>
+        </div>
+
+        {/* Logs */}
+        <div className="bg-slate-800/50 border border-slate-700 rounded-xl p-4 flex flex-col h-full">
+           <h3 className="text-lg font-medium mb-2">Simulation Logs</h3>
+           <div ref={scrollRef} className="flex-1 overflow-y-auto scrollbar-thin text-xs font-mono space-y-1 p-2 bg-slate-900/50 rounded-lg">
+             {logs.map((log, i) => (
+               <div key={i} className={`
+                 ${log.type === 'ACTION' ? 'text-slate-400' : ''}
+                 ${log.type === 'INFO' ? 'text-blue-300 font-bold mt-2' : ''}
+                 ${log.type === 'MARKET' ? 'text-amber-300' : ''}
+                 ${log.type === 'ERROR' ? 'text-red-500' : ''}
+               `}>
+                 <span className="opacity-50 mr-2">[D{log.day}]</span>
+                 {log.message}
+               </div>
+             ))}
+           </div>
+        </div>
+      </div>
+
+      <div className="mb-8">
+        <h3 className="text-xl font-bold mb-4">Live Bot Status</h3>
+        <BotTable bots={bots} />
+      </div>
+    </div>
+  );
+};
+
+export default App;
+
+const root = createRoot(document.getElementById('root')!);
+root.render(<App />);

@@ -1,0 +1,5 @@
+{
+  "name": "MMO Economy Sim",
+  "description": "AI-driven MMORPG economic simulator with dual-token system, AMM, and autonomous bots.",
+  "requestFramePermissions": []
+}
