@@ -1,10 +1,10 @@
 import React, { useState, useEffect, useRef } from 'react';
 import 
-  { LineChart, Line, XAxis, YAxis, Tooltip, CartesianGrid, ResponsiveContainer, AreaChart, Area, BarChart, Bar } 
+  { LineChart, Line, XAxis, YAxis, Tooltip, CartesianGrid, ResponsiveContainer } 
 from 'recharts';
 import * as XLSX from 'xlsx';
 import { 
-  Bot, BotAction, GlobalState, BotPersonality, PriceTrend, LogEntry, DailyStat
+  Bot, BotAction, GlobalState, PriceTrend, LogEntry, DailyStat
 } from './types';
 import { 
   INITIAL_RESERVE_LVMON, INITIAL_RESERVE_MEME, PERSONALITY_DISTRIBUTION, PERSONALITY_CONFIG,
@@ -12,13 +12,13 @@ import {
   DAILY_MEME_REWARD, TAX_RATE, STAKING_DIVIDEND_RATE
 } from './constants';
 import { 
-  randomInt, getAmountOut, getSpotPrice, calculateBuybackRate, calculateNewChests, formatCurrency 
+  randomInt, getAmountOut, getSpotPrice, calculateBuybackRate, formatCurrency 
 } from './utils';
 import { generateSingleBotDecision } from './services/geminiService';
 import InfoCard from './components/InfoCard';
 import BotTable from './components/BotTable';
 import { 
-  Coins, TrendingUp, Pickaxe, Landmark, Play, Pause, FolderInput, RotateCcw, Activity, FileSpreadsheet
+  Coins, TrendingUp, Pickaxe, Landmark, Play, Pause, RotateCcw, Activity, FileSpreadsheet, Download
 } from 'lucide-react';
 
 const App: React.FC = () => {
@@ -49,9 +49,6 @@ const App: React.FC = () => {
   const [history, setHistory] = useState<DailyStat[]>([]);
   const [botHistory, setBotHistory] = useState<any[]>([]); // For Excel export
   
-  // File System Handle for Real-time Logging
-  const [dirHandle, setDirHandle] = useState<any>(null); // Using any for FileSystemDirectoryHandle to avoid ts lib issues
-
   const scrollRef = useRef<HTMLDivElement>(null);
 
   // --- Initialization ---
@@ -103,26 +100,18 @@ const App: React.FC = () => {
     }]);
   };
 
-  // --- Real-time Logging ---
-  const selectLogFolder = async () => {
-    try {
-      // @ts-ignore - showDirectoryPicker is standard in modern browsers but might need dom lib update
-      const handle = await window.showDirectoryPicker();
-      setDirHandle(handle);
-      addLog('INFO', 'Logging enabled: Excel files will update in real-time in selected folder.');
-    } catch (err) {
-      console.error("Folder selection failed:", err);
-      addLog('ERROR', 'Failed to select folder for logging.');
+  // --- Excel Export Logic ---
+  const exportData = () => {
+    if (history.length === 0 && botHistory.length === 0) {
+      addLog('ERROR', 'No data to export yet.');
+      return;
     }
-  };
-
-  const writeLogsToDisk = async (currentHistory: DailyStat[], currentBotHistory: any[]) => {
-    if (!dirHandle) return;
 
     try {
-      // 1. Write Global Stats
-      const wbGlobal = XLSX.utils.book_new();
-      const globalData = currentHistory.map(h => ({
+      const wb = XLSX.utils.book_new();
+
+      // 1. Global Overview Sheet
+      const globalData = history.map(h => ({
         Day: h.day,
         Price: h.price,
         TotalWealth: h.wealth,
@@ -130,33 +119,21 @@ const App: React.FC = () => {
         TotalStaked: h.staked
       }));
       const wsGlobal = XLSX.utils.json_to_sheet(globalData);
-      XLSX.utils.book_append_sheet(wbGlobal, wsGlobal, "Global Overview");
-      const globalBuffer = XLSX.write(wbGlobal, { bookType: 'xlsx', type: 'array' });
-      
-      const globalFileHandle = await dirHandle.getFileHandle('MMO_Economy_Sim.xlsx', { create: true });
-      const globalWritable = await globalFileHandle.createWritable();
-      await globalWritable.write(globalBuffer);
-      await globalWritable.close();
+      XLSX.utils.book_append_sheet(wb, wsGlobal, "Global Overview");
 
-      // 2. Write Bot Logs
-      const wbBots = XLSX.utils.book_new();
-      const wsBots = XLSX.utils.json_to_sheet(currentBotHistory);
-      XLSX.utils.book_append_sheet(wbBots, wsBots, "Bot Logs");
-      const botsBuffer = XLSX.write(wbBots, { bookType: 'xlsx', type: 'array' });
-      
-      const botsFileHandle = await dirHandle.getFileHandle('BotLogs.xlsx', { create: true });
-      const botsWritable = await botsFileHandle.createWritable();
-      await botsWritable.write(botsBuffer);
-      await botsWritable.close();
+      // 2. Bot Logs Sheet
+      const wsBots = XLSX.utils.json_to_sheet(botHistory);
+      XLSX.utils.book_append_sheet(wb, wsBots, "Bot Logs");
 
+      // Generate File Name
+      const fileName = `MMO_Sim_Export_D${day}.xlsx`;
+      
+      // Trigger Download
+      XLSX.writeFile(wb, fileName);
+      addLog('INFO', `Data successfully exported to ${fileName}`);
     } catch (err: any) {
-      // Check if it's a file lock error (common if user has Excel open)
-      if (err.name === 'NoModificationAllowedError' || err.message.includes('locked')) {
-         addLog('ERROR', 'File Write Failed: Excel file is likely open and locked. Close it to resume logging.');
-      } else {
-         console.error("Real-time write failed", err);
-         addLog('ERROR', `Log Write Error: ${err.message}`);
-      }
+      console.error("Export failed:", err);
+      addLog('ERROR', `Export failed: ${err.message}`);
     }
   };
 
@@ -383,7 +360,6 @@ const App: React.FC = () => {
              
              // UPDATE MARKET PRICE IMMEDIATELY FOR NEXT BOT
              currentState.marketPrice = getSpotPrice(currentState.reserveLvMON, currentState.reserveMEME);
-             const prevPrice = globalState.marketPrice; 
              
              actionLog += `Sold ${formatCurrency(amountIn)} MEME. `;
            }
@@ -484,7 +460,7 @@ const App: React.FC = () => {
       setDay(d => d + 1);
 
       // --- RECORD BOT HISTORY FOR EXPORT ---
-      // We do this at the very end to capture final balances (after buyback dividends)
+      // We accumulate data in memory (botHistory state) to be exported on demand
       const dailyBotRecords = currentBots.map(bot => {
          const turnLog = turnLogs.get(bot.id) || { log: '-', rationale: '-' };
          return {
@@ -511,11 +487,6 @@ const App: React.FC = () => {
       });
       const nextBotHistory = [...botHistory, ...dailyBotRecords];
       setBotHistory(nextBotHistory);
-
-      // --- REAL TIME LOGGING ---
-      if (dirHandle) {
-         await writeLogsToDisk(nextHistory, nextBotHistory);
-      }
 
     } catch (e) {
       console.error(e);
@@ -570,7 +541,6 @@ const App: React.FC = () => {
     }]);
     setBotHistory([]);
     setActiveBotId(null);
-    setDirHandle(null); // Reset file handle
   };
 
   return (
@@ -598,12 +568,12 @@ const App: React.FC = () => {
            </button>
            
            <button 
-             onClick={selectLogFolder} 
-             className={`flex items-center gap-2 px-4 py-2 rounded-lg font-medium transition-colors ${dirHandle ? 'bg-green-600/20 text-green-400 border border-green-600' : 'bg-slate-700 hover:bg-slate-600'}`}
-             title={dirHandle ? "Logging Active: Real-time updates to folder" : "Select folder to enable real-time Excel logging"}
+             onClick={exportData} 
+             className="flex items-center gap-2 px-4 py-2 rounded-lg font-medium transition-colors bg-green-600 hover:bg-green-700 text-white shadow-lg"
+             title="Download Excel Report (Global + Bot Logs)"
            >
-             {dirHandle ? <FileSpreadsheet size={18} /> : <FolderInput size={18} />}
-             {dirHandle ? "Logging Active" : "Set Log Folder"}
+             <Download size={18} />
+             Export Excel
            </button>
         </div>
       </header>
