@@ -51,7 +51,10 @@ export const generateSingleBotDecision = async (
         currentBot.lvMON + 
         (currentBot.meme + currentBot.stakedMeme) * globalState.marketPrice + 
         currentBot.wealth * 1.5
-      )
+      ),
+      // Memory Injection
+      lastDayPlan: currentBot.memory?.lastDayGoal || "No previous plan",
+      goalAchieved: currentBot.memory?.achievedGoal === true ? "YES" : (currentBot.memory?.achievedGoal === false ? "NO" : "UNKNOWN/NEW")
     },
     otherBots: allBots
       .filter(b => b.id !== currentBot.id)
@@ -86,7 +89,8 @@ export const generateSingleBotDecision = async (
             unstakeMemePercent: { type: Type.NUMBER },
             sellMemePercent: { type: Type.NUMBER },
             stakeMemePercent: { type: Type.NUMBER },
-            rationale: { type: Type.STRING }
+            rationale: { type: Type.STRING },
+            tomorrowGoal: { type: Type.STRING, description: "Optional: Your plan for tomorrow (one sentence)" }
           },
           required: ["botId", "craftCount", "salvageCount", "openChests", "investMedals", "unstakeMemePercent", "sellMemePercent", "stakeMemePercent", "rationale"]
         }

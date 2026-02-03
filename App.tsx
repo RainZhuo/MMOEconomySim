@@ -12,7 +12,8 @@ import {
   DAILY_MEME_REWARD, TAX_RATE, STAKING_DIVIDEND_RATE
 } from './constants';
 import { 
-  randomInt, getAmountOut, getSpotPrice, calculateBuybackRate, formatCurrency 
+  randomInt, getAmountOut, getSpotPrice, calculateBuybackRate, formatCurrency,
+  extractGoalMetrics, checkGoalCompletion
 } from './utils';
 import { generateSingleBotDecision } from './services/geminiService';
 import InfoCard from './components/InfoCard';
@@ -84,7 +85,8 @@ const App: React.FC = () => {
         chests: 0,
         chestsOpenedToday: 0,
         equipmentCount: 0,
-        lastActionLog: "Initialized"
+        lastActionLog: "Initialized",
+        memory: undefined
       };
     });
     setBots(newBots);
@@ -219,7 +221,7 @@ const App: React.FC = () => {
       const botMap = new Map<number, Bot>(currentBots.map(b => [b.id, b]));
       
       // Track logs for export
-      const turnLogs = new Map<number, { log: string, rationale: string }>();
+      const turnLogs = new Map<number, { log: string, rationale: string, goal: string }>();
 
       let todayNewWealth = 0;
       let todayChestRevenue = 0;
@@ -248,6 +250,17 @@ const App: React.FC = () => {
         if (!bot) {
             console.error(`Bot ${botRef.id} not found in map`);
             continue;
+        }
+
+        // --- CHECK GOAL ACHIEVEMENT (Before Act) ---
+        // If the bot had a memory goal from yesterday, check if it is met NOW.
+        if (bot.memory && bot.memory.lastDayGoal) {
+          const isMet = checkGoalCompletion(bot, bot.memory.targetMetrics);
+          // Update memory with achievement status so AI sees it
+          bot.memory = {
+            ...bot.memory,
+            achievedGoal: isMet
+          };
         }
         
         // Pass CURRENT state (including price changes from previous bots in this loop)
@@ -378,8 +391,19 @@ const App: React.FC = () => {
 
         bot.lastActionLog = `[D${day}] ${actionLog || "Idle"}`;
         bot.lastDecisionRationale = action.rationale;
+
+        // --- SAVE MEMORY (Tomorrow Goal) ---
+        if (action.tomorrowGoal) {
+          bot.memory = {
+             lastDayGoal: action.tomorrowGoal,
+             targetMetrics: extractGoalMetrics(action.tomorrowGoal),
+             achievedGoal: false // Reset status for next check
+          };
+          // Display goal in log for debugging/observability
+          actionLog += ` [Plan: ${action.tomorrowGoal}]`;
+        }
         
-        turnLogs.set(bot.id, { log: actionLog, rationale: action.rationale });
+        turnLogs.set(bot.id, { log: actionLog, rationale: action.rationale, goal: action.tomorrowGoal || '-' });
 
         // Update Maps & State incrementally
         botMap.set(bot.id, bot);
@@ -462,13 +486,14 @@ const App: React.FC = () => {
       // --- RECORD BOT HISTORY FOR EXPORT ---
       // We accumulate data in memory (botHistory state) to be exported on demand
       const dailyBotRecords = currentBots.map(bot => {
-         const turnLog = turnLogs.get(bot.id) || { log: '-', rationale: '-' };
+         const turnLog = turnLogs.get(bot.id) || { log: '-', rationale: '-', goal: '-' };
          return {
             Day: day,
             BotID: bot.id,
             Personality: bot.personality,
             Strategy_Rationale: turnLog.rationale,
             Action_Log: turnLog.log,
+            Tomorrow_Goal: turnLog.goal, // Added to export
             LvMON: bot.lvMON,
             PnL: bot.lvMON - bot.initialLvMON,
             MEME: bot.meme,

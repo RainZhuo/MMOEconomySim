@@ -12,6 +12,16 @@ export enum PriceTrend {
   Stable = 'Stable'
 }
 
+export interface BotMemory {
+  lastDayGoal: string;
+  targetMetrics?: {
+    targetLvMON?: number;
+    targetMedals?: number;
+    targetChests?: number;
+  };
+  achievedGoal?: boolean;
+}
+
 export interface Bot {
   id: number;
   personality: BotPersonality;
@@ -27,6 +37,7 @@ export interface Bot {
   equipmentCount: number;
   lastActionLog?: string;
   lastDecisionRationale?: string;
+  memory?: BotMemory;
 }
 
 export interface GlobalState {
@@ -55,6 +66,7 @@ export interface BotAction {
   sellMemePercent: number;    // 0.0 - 1.0
   stakeMemePercent: number;   // 0.0 - 1.0
   rationale: string;
+  tomorrowGoal?: string;      // Optional future planning
 }
 
 export interface LogEntry {

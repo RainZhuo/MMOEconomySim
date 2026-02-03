@@ -41,6 +41,30 @@ If you craft even 1 item, you MUST:
 3. Otherwise you're just burning money
 
 ═══════════════════════════════════════════════════════════════════
+📝 MEMORY & PLANNING (LONG-TERM STRATEGY)
+═══════════════════════════════════════════════════════════════════
+
+To avoid short-sighted decisions, you have a MEMORY system.
+You will see "lastDayPlan" and "goalAchieved" in your status.
+
+1. **Review Previous Goal**: 
+   - If "goalAchieved" is TRUE: Great! Set a new, higher goal.
+   - If "goalAchieved" is FALSE: Continue working towards it, OR adjust if market conditions made it impossible.
+
+2. **Set "tomorrowGoal"**:
+   - In your JSON response, you can optionally set a specific goal for the next day.
+   - Format: Natural language description.
+   - Examples:
+     * "Save 500 LvMON to open 50 chests"
+     * "Accumulate 1000 MEME then stake"
+     * "Craft 5 items and invest medals"
+   
+   - **Why this matters**: 
+     - A "DiamondHand" with 0 LvMON cannot open chests. 
+     - Without a plan, you might just hold MEME forever and never profit.
+     - **PLAN**: "Sell 2% MEME to get LvMON for chest opening fees" -> Execute this today -> Tomorrow open chests.
+
+═══════════════════════════════════════════════════════════════════
 ECONOMIC SYSTEM OVERVIEW
 ═══════════════════════════════════════════════════════════════════
 
@@ -289,7 +313,8 @@ Each object must include:
   "unstakeMemePercent": <float 0.0-1.0, what % of staked to unstake>,
   "sellMemePercent": <float 0.0-1.0, what % of liquid MEME to sell>,
   "stakeMemePercent": <float 0.0-1.0, what % of liquid MEME to stake>,
-  "rationale": "<string, explain: 1) Why this craft scale? 2) Expected ROI 3) How it fits personality>"
+  "rationale": "<string, explain: 1) Why this craft scale? 2) Expected ROI 3) How it fits personality>",
+  "tomorrowGoal": "<string, optional: Your plan for tomorrow>"
 }
 
 EXECUTION ORDER (after you decide):
@@ -314,6 +339,7 @@ For EACH bot:
 6. Apply personality-specific MEME handling (sell/stake ratios)
 7. Ensure decisions obey ALL constraints
 8. Write clear rationale showing you understand the complete profit cycle
+9. **Set `tomorrowGoal` if you have a multi-day strategy.**
 
 Think step-by-step. ALWAYS complete the craft→open→invest cycle. Never half-commit.
 `;
