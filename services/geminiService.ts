@@ -4,19 +4,9 @@ import { CRAFT_COST, WEALTH_PER_ITEM } from '../constants';
 import { STRATEGY_SYSTEM_INSTRUCTION } from './strategyPrompt';
 
 const getAiClient = () => {
-  // ---------------------------------------------------------
-  // 🔑 API KEY CONFIGURATION
-  // To run this app, you need a Google Gemini API Key.
-  // The key is now loaded from the .env file via import.meta.env.VITE_API_KEY
-  // ---------------------------------------------------------
-  // Vite uses import.meta.env.VITE_* for client-side environment variables
-  const apiKey = import.meta.env.VITE_API_KEY;
-  
-  if (!apiKey) {
-    console.warn("API Key missing. Please set VITE_API_KEY in your .env file.");
-    return null;
-  }
-  return new GoogleGenAI({ apiKey });
+  // Use process.env.API_KEY directly as per SDK guidelines.
+  // We assume process.env.API_KEY is available and valid.
+  return new GoogleGenAI({ apiKey: process.env.API_KEY });
 };
 
 export const generateSingleBotDecision = async (
@@ -27,11 +17,6 @@ export const generateSingleBotDecision = async (
 ): Promise<BotAction> => {
   const ai = getAiClient();
   
-  // Fallback if no API key or error
-  if (!ai) {
-    return generateFallbackDecision(currentBot, globalState);
-  }
-
   const systemInstruction = STRATEGY_SYSTEM_INSTRUCTION;
 
   const prompt = JSON.stringify({

@@ -18,7 +18,7 @@ import { generateSingleBotDecision } from './services/geminiService';
 import InfoCard from './components/InfoCard';
 import BotTable from './components/BotTable';
 import { 
-  Coins, TrendingUp, Pickaxe, Landmark, Play, Pause, Save, RotateCcw, Activity 
+  Coins, TrendingUp, Pickaxe, Landmark, Play, Pause, FolderInput, RotateCcw, Activity, FileSpreadsheet
 } from 'lucide-react';
 
 const App: React.FC = () => {
@@ -48,6 +48,9 @@ const App: React.FC = () => {
   const [logs, setLogs] = useState<LogEntry[]>([]);
   const [history, setHistory] = useState<DailyStat[]>([]);
   const [botHistory, setBotHistory] = useState<any[]>([]); // For Excel export
+  
+  // File System Handle for Real-time Logging
+  const [dirHandle, setDirHandle] = useState<any>(null); // Using any for FileSystemDirectoryHandle to avoid ts lib issues
 
   const scrollRef = useRef<HTMLDivElement>(null);
 
@@ -100,6 +103,63 @@ const App: React.FC = () => {
     }]);
   };
 
+  // --- Real-time Logging ---
+  const selectLogFolder = async () => {
+    try {
+      // @ts-ignore - showDirectoryPicker is standard in modern browsers but might need dom lib update
+      const handle = await window.showDirectoryPicker();
+      setDirHandle(handle);
+      addLog('INFO', 'Logging enabled: Excel files will update in real-time in selected folder.');
+    } catch (err) {
+      console.error("Folder selection failed:", err);
+      addLog('ERROR', 'Failed to select folder for logging.');
+    }
+  };
+
+  const writeLogsToDisk = async (currentHistory: DailyStat[], currentBotHistory: any[]) => {
+    if (!dirHandle) return;
+
+    try {
+      // 1. Write Global Stats
+      const wbGlobal = XLSX.utils.book_new();
+      const globalData = currentHistory.map(h => ({
+        Day: h.day,
+        Price: h.price,
+        TotalWealth: h.wealth,
+        Reservoir: h.reservoir,
+        TotalStaked: h.staked
+      }));
+      const wsGlobal = XLSX.utils.json_to_sheet(globalData);
+      XLSX.utils.book_append_sheet(wbGlobal, wsGlobal, "Global Overview");
+      const globalBuffer = XLSX.write(wbGlobal, { bookType: 'xlsx', type: 'array' });
+      
+      const globalFileHandle = await dirHandle.getFileHandle('MMO_Economy_Sim.xlsx', { create: true });
+      const globalWritable = await globalFileHandle.createWritable();
+      await globalWritable.write(globalBuffer);
+      await globalWritable.close();
+
+      // 2. Write Bot Logs
+      const wbBots = XLSX.utils.book_new();
+      const wsBots = XLSX.utils.json_to_sheet(currentBotHistory);
+      XLSX.utils.book_append_sheet(wbBots, wsBots, "Bot Logs");
+      const botsBuffer = XLSX.write(wbBots, { bookType: 'xlsx', type: 'array' });
+      
+      const botsFileHandle = await dirHandle.getFileHandle('BotLogs.xlsx', { create: true });
+      const botsWritable = await botsFileHandle.createWritable();
+      await botsWritable.write(botsBuffer);
+      await botsWritable.close();
+
+    } catch (err: any) {
+      // Check if it's a file lock error (common if user has Excel open)
+      if (err.name === 'NoModificationAllowedError' || err.message.includes('locked')) {
+         addLog('ERROR', 'File Write Failed: Excel file is likely open and locked. Close it to resume logging.');
+      } else {
+         console.error("Real-time write failed", err);
+         addLog('ERROR', `Log Write Error: ${err.message}`);
+      }
+    }
+  };
+
   // --- Core Simulation Logic ---
 
   const advanceDay = async () => {
@@ -110,36 +170,53 @@ const App: React.FC = () => {
       addLog('INFO', `--- Day ${day} Start ---`);
       
       // Reset daily counters
-      let currentBots = bots.map(b => ({ ...b, chestsOpenedToday: 0 }));
+      let currentBots: Bot[] = bots.map(b => ({ ...b, chestsOpenedToday: 0 }));
       let currentState = { ...globalState };
 
-      // 1. Morning Rewards (Based on Yesterday's Pool)
+      // 1. Morning Rewards (Based on Yesterday's Pool) & Daily Chest Issuance
       const poolTotal = currentState.totalMedalsInPool; 
       let distributedRewardTotal = 0;
       let taxCollected = 0;
+      let totalDailyChestsIssued = 0;
 
+      // First pass: Distribute Pool Rewards and Issue Daily Chests
+      currentBots = currentBots.map(bot => {
+        let newMeme = bot.meme;
+        let newInvested = bot.investedMedals;
+        
+        // Medal Pool Reward
+        if (bot.investedMedals > 0 && poolTotal > 0) {
+          const share = bot.investedMedals / poolTotal;
+          const rawReward = DAILY_MEME_REWARD * share;
+          const tax = rawReward * TAX_RATE;
+          const netReward = rawReward - tax;
+          
+          taxCollected += tax;
+          distributedRewardTotal += netReward;
+          newMeme += netReward;
+          newInvested = 0; // Reset after payout
+        }
+
+        // Chest Issuance (Morning Stipend based on Wealth)
+        const dailyChests = Math.floor(bot.wealth / 100);
+        totalDailyChestsIssued += dailyChests;
+
+        return {
+          ...bot,
+          meme: newMeme,
+          investedMedals: newInvested,
+          chests: bot.chests + dailyChests // Accumulate chests
+        };
+      });
+      
       if (poolTotal > 0) {
-        currentBots = currentBots.map(bot => {
-          if (bot.investedMedals > 0) {
-            const share = bot.investedMedals / poolTotal;
-            const rawReward = DAILY_MEME_REWARD * share;
-            const tax = rawReward * TAX_RATE;
-            const netReward = rawReward - tax;
-            
-            taxCollected += tax;
-            distributedRewardTotal += netReward;
-            
-            return {
-              ...bot,
-              meme: bot.meme + netReward,
-              investedMedals: 0 // Reset after payout
-            };
-          }
-          return bot;
-        });
-        addLog('INFO', `Distributed ${formatCurrency(distributedRewardTotal)} MEME. Tax collected: ${formatCurrency(taxCollected)} MEME.`);
+        addLog('INFO', `Distributed ${formatCurrency(distributedRewardTotal)} MEME. Tax: ${formatCurrency(taxCollected)} MEME.`);
       } else {
         addLog('INFO', 'No medals in pool yesterday. No rewards distributed.');
+      }
+      
+      if (totalDailyChestsIssued > 0) {
+         addLog('INFO', `Morning Supply: Issued ${totalDailyChestsIssued} chests based on bot wealth.`);
       }
 
       // 2. Tax Redistribution (Based on Wealth)
@@ -162,7 +239,7 @@ const App: React.FC = () => {
       // 3. Sequential Execution Phase
       // Shuffle bots for random turn order
       const turnOrder = [...currentBots].sort(() => Math.random() - 0.5);
-      const botMap = new Map(currentBots.map(b => [b.id, b]));
+      const botMap = new Map<number, Bot>(currentBots.map(b => [b.id, b]));
       
       // Track logs for export
       const turnLogs = new Map<number, { log: string, rationale: string }>();
@@ -189,7 +266,12 @@ const App: React.FC = () => {
         setActiveBotId(botRef.id);
 
         // Always get fresh bot state from map (though in this local scope botRef is stale, we use map)
-        const bot = botMap.get(botRef.id)!;
+        const bot = botMap.get(botRef.id);
+        
+        if (!bot) {
+            console.error(`Bot ${botRef.id} not found in map`);
+            continue;
+        }
         
         // Pass CURRENT state (including price changes from previous bots in this loop)
         const action = await generateSingleBotDecision(day, currentState, bot, Array.from(botMap.values()));
@@ -217,23 +299,31 @@ const App: React.FC = () => {
           bot.lvMON -= cost;
           bot.equipmentCount += actualCraft;
           
+          const oldWealth = bot.wealth;
           const wealthGain = actualCraft * WEALTH_PER_ITEM;
           bot.wealth += wealthGain;
+          
+          // Incremental Chest Issuance (based on wealth GAIN this turn)
+          // Uses delta of floors to handle remainders correctly across multiple turns
+          const addedChests = Math.floor(bot.wealth / 100) - Math.floor(oldWealth / 100);
+          bot.chests += addedChests;
+
           currentState.totalWealth += wealthGain;
           todayNewWealth += wealthGain;
           
           currentState.reservoirLvMON += cost * RESERVOIR_CONTRIBUTION_RATE;
-          bot.chests = Math.floor(bot.wealth / 100); 
-          actionLog += `Crafted ${actualCraft}. `;
+          actionLog += `Crafted ${actualCraft} (+${addedChests} chests). `;
         }
 
         // 4.3 Open Chests
+        // Limit: Can't open more than you have, or more than you can afford
         const maxOpen = Math.min(bot.chests, Math.floor(bot.lvMON / CHEST_OPEN_COST));
         const actualOpen = Math.min(action.openChests, maxOpen);
+        
         if (actualOpen > 0) {
           const cost = actualOpen * CHEST_OPEN_COST;
           bot.lvMON -= cost;
-          bot.chests -= actualOpen; 
+          bot.chests -= actualOpen; // CONSUME Chests
           bot.chestsOpenedToday += actualOpen;
           todayChestRevenue += cost;
           
@@ -389,7 +479,8 @@ const App: React.FC = () => {
 
       setBots(currentBots);
       setGlobalState({ ...currentState, day: day + 1 });
-      setHistory(prev => [...prev, newHistoryItem]);
+      const nextHistory = [...history, newHistoryItem];
+      setHistory(nextHistory);
       setDay(d => d + 1);
 
       // --- RECORD BOT HISTORY FOR EXPORT ---
@@ -418,7 +509,13 @@ const App: React.FC = () => {
             Global_Total_Staked: currentState.totalStakedMeme
          };
       });
-      setBotHistory(prev => [...prev, ...dailyBotRecords]);
+      const nextBotHistory = [...botHistory, ...dailyBotRecords];
+      setBotHistory(nextBotHistory);
+
+      // --- REAL TIME LOGGING ---
+      if (dirHandle) {
+         await writeLogsToDisk(nextHistory, nextBotHistory);
+      }
 
     } catch (e) {
       console.error(e);
@@ -444,27 +541,6 @@ const App: React.FC = () => {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [simulationRunning, processing]); 
 
-  const exportToExcel = () => {
-    // 1. Export Global Data
-    const wbGlobal = XLSX.utils.book_new();
-    const globalData = history.map(h => ({
-      Day: h.day,
-      Price: h.price,
-      TotalWealth: h.wealth,
-      Reservoir: h.reservoir,
-      TotalStaked: h.staked
-    }));
-    const wsGlobal = XLSX.utils.json_to_sheet(globalData);
-    XLSX.utils.book_append_sheet(wbGlobal, wsGlobal, "Global Overview");
-    XLSX.writeFile(wbGlobal, "MMO_Economy_Sim.xlsx");
-
-    // 2. Export Bot Logs
-    const wbBots = XLSX.utils.book_new();
-    const wsBots = XLSX.utils.json_to_sheet(botHistory);
-    XLSX.utils.book_append_sheet(wbBots, wsBots, "Bot Logs");
-    XLSX.writeFile(wbBots, "BotLogs.xlsx");
-  };
-
   const resetSim = () => {
     setSimulationRunning(false);
     setDay(1);
@@ -485,8 +561,16 @@ const App: React.FC = () => {
       buybackHistory: []
     });
     setLogs([]);
+    setHistory([{
+      day: 1,
+      price: INITIAL_RESERVE_LVMON / INITIAL_RESERVE_MEME,
+      wealth: 0,
+      reservoir: 0,
+      staked: 0
+    }]);
     setBotHistory([]);
     setActiveBotId(null);
+    setDirHandle(null); // Reset file handle
   };
 
   return (
@@ -509,11 +593,17 @@ const App: React.FC = () => {
            <button onClick={() => advanceDay()} disabled={simulationRunning || processing} className="px-4 py-2 bg-blue-600 hover:bg-blue-700 rounded-lg font-medium disabled:opacity-50">
              Next Day
            </button>
-           <button onClick={resetSim} className="p-2 bg-slate-700 hover:bg-slate-600 rounded-lg text-slate-300">
+           <button onClick={resetSim} className="p-2 bg-slate-700 hover:bg-slate-600 rounded-lg text-slate-300" title="Reset Simulation">
              <RotateCcw size={20} />
            </button>
-           <button onClick={exportToExcel} className="flex items-center gap-2 px-4 py-2 bg-slate-700 hover:bg-slate-600 rounded-lg font-medium">
-             <Save size={18} /> Export
+           
+           <button 
+             onClick={selectLogFolder} 
+             className={`flex items-center gap-2 px-4 py-2 rounded-lg font-medium transition-colors ${dirHandle ? 'bg-green-600/20 text-green-400 border border-green-600' : 'bg-slate-700 hover:bg-slate-600'}`}
+             title={dirHandle ? "Logging Active: Real-time updates to folder" : "Select folder to enable real-time Excel logging"}
+           >
+             {dirHandle ? <FileSpreadsheet size={18} /> : <FolderInput size={18} />}
+             {dirHandle ? "Logging Active" : "Set Log Folder"}
            </button>
         </div>
       </header>
