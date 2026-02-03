@@ -4,7 +4,7 @@ import
 from 'recharts';
 import * as XLSX from 'xlsx';
 import { 
-  Bot, BotAction, GlobalState, PriceTrend, LogEntry, DailyStat, BotPersonality
+  Bot, BotAction, GlobalState, BotPersonality, PriceTrend, LogEntry, DailyStat
 } from './types';
 import { 
   INITIAL_RESERVE_LVMON, INITIAL_RESERVE_MEME, PERSONALITY_DISTRIBUTION, PERSONALITY_CONFIG,
@@ -549,9 +549,9 @@ const App: React.FC = () => {
         />
       </div>
 
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 mb-8 h-[400px]">
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 mb-8">
         {/* Charts */}
-        <div className="lg:col-span-2 bg-slate-800/50 border border-slate-700 rounded-xl p-4">
+        <div className="lg:col-span-2 h-[400px] bg-slate-800/50 border border-slate-700 rounded-xl p-4">
           <h3 className="text-lg font-medium mb-4 flex items-center gap-2">
             <Activity size={18} /> Market History
           </h3>
@@ -571,9 +571,9 @@ const App: React.FC = () => {
         </div>
 
         {/* Logs */}
-        <div className="bg-slate-800/50 border border-slate-700 rounded-xl p-4 flex flex-col h-full">
+        <div className="h-[400px] bg-slate-800/50 border border-slate-700 rounded-xl p-4 flex flex-col">
            <h3 className="text-lg font-medium mb-2">Simulation Logs</h3>
-           <div ref={scrollRef} className="flex-1 overflow-y-auto scrollbar-thin text-xs font-mono space-y-1 p-2 bg-slate-900/50 rounded-lg">
+           <div ref={scrollRef} className="flex-1 min-h-0 overflow-y-auto scrollbar-thin text-xs font-mono space-y-1 p-2 bg-slate-900/50 rounded-lg">
              {logs.map((log, i) => (
                <div key={i} className={`
                  ${log.type === 'ACTION' ? 'text-slate-400' : ''}
