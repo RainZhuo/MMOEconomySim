@@ -7,12 +7,13 @@ const getAiClient = () => {
   // ---------------------------------------------------------
   // 🔑 API KEY CONFIGURATION
   // To run this app, you need a Google Gemini API Key.
-  // The key is now loaded from the .env file via process.env.API_KEY
+  // The key is now loaded from the .env file via import.meta.env.VITE_API_KEY
   // ---------------------------------------------------------
-  const apiKey = process.env.API_KEY;
+  // Vite uses import.meta.env.VITE_* for client-side environment variables
+  const apiKey = import.meta.env.VITE_API_KEY;
   
   if (!apiKey) {
-    console.warn("API Key missing. Please set process.env.API_KEY in your .env file.");
+    console.warn("API Key missing. Please set VITE_API_KEY in your .env file.");
     return null;
   }
   return new GoogleGenAI({ apiKey });
@@ -84,7 +85,7 @@ export const generateSingleBotDecision = async (
 
   try {
     const response = await ai.models.generateContent({
-      model: 'gemini-3-flash-preview',
+      model: 'gemini-2.0-flash', // Use efficient model
       contents: prompt,
       config: {
         systemInstruction,
