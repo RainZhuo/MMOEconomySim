@@ -173,7 +173,18 @@ const App: React.FC = () => {
 
       addLog('INFO', '--- Bot Turns Start ---');
 
-      for (const botRef of turnOrder) {
+      // Loop through shuffled bots sequentially
+      for (let i = 0; i < turnOrder.length; i++) {
+        const botRef = turnOrder[i];
+
+        // --- Rate Limiting Strategy for Free Tier ---
+        // 15 requests per minute = 1 request every 4 seconds.
+        // We add a 3 second delay between bots. 
+        // Including API latency (~1-2s), this ensures ~5s per bot.
+        if (i > 0) {
+          await new Promise(resolve => setTimeout(resolve, 3000));
+        }
+
         // Highlight current bot
         setActiveBotId(botRef.id);
 
@@ -434,9 +445,8 @@ const App: React.FC = () => {
   }, [simulationRunning, processing]); 
 
   const exportToExcel = () => {
-    const wb = XLSX.utils.book_new();
-    
-    // Global Sheet
+    // 1. Export Global Data
+    const wbGlobal = XLSX.utils.book_new();
     const globalData = history.map(h => ({
       Day: h.day,
       Price: h.price,
@@ -445,13 +455,14 @@ const App: React.FC = () => {
       TotalStaked: h.staked
     }));
     const wsGlobal = XLSX.utils.json_to_sheet(globalData);
-    XLSX.utils.book_append_sheet(wb, wsGlobal, "Global Overview");
+    XLSX.utils.book_append_sheet(wbGlobal, wsGlobal, "Global Overview");
+    XLSX.writeFile(wbGlobal, "MMO_Economy_Sim.xlsx");
 
-    // Bot Sheet
+    // 2. Export Bot Logs
+    const wbBots = XLSX.utils.book_new();
     const wsBots = XLSX.utils.json_to_sheet(botHistory);
-    XLSX.utils.book_append_sheet(wb, wsBots, "Bot Logs");
-
-    XLSX.writeFile(wb, "MMO_Economy_Sim.xlsx");
+    XLSX.utils.book_append_sheet(wbBots, wsBots, "Bot Logs");
+    XLSX.writeFile(wbBots, "BotLogs.xlsx");
   };
 
   const resetSim = () => {

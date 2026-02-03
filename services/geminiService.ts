@@ -7,16 +7,12 @@ const getAiClient = () => {
   // ---------------------------------------------------------
   // 🔑 API KEY CONFIGURATION
   // To run this app, you need a Google Gemini API Key.
-  // Option 1: Set the environment variable API_KEY in your project settings.
-  // Option 2: Replace process.env.API_KEY below with your actual key string, e.g. "AIzaSy..."
+  // The key is now loaded from the .env file via process.env.API_KEY
   // ---------------------------------------------------------
-  // const apiKey = process.env.API_KEY;
-
-  //Here is my actual API Key, Don't remove it or change it!!
-  const apiKey = "AIzaSyBcOwSPmmbOfk8Xc6MjNthWpdddt4d3LQQ";
+  const apiKey = process.env.API_KEY;
   
   if (!apiKey) {
-    console.warn("API Key missing. Please set process.env.API_KEY or hardcode it in services/geminiService.ts");
+    console.warn("API Key missing. Please set process.env.API_KEY in your .env file.");
     return null;
   }
   return new GoogleGenAI({ apiKey });
