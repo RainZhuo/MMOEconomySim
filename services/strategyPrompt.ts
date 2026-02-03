@@ -339,7 +339,7 @@ For EACH bot:
 6. Apply personality-specific MEME handling (sell/stake ratios)
 7. Ensure decisions obey ALL constraints
 8. Write clear rationale showing you understand the complete profit cycle
-9. **Set `tomorrowGoal` if you have a multi-day strategy.**
+9. **Set \`tomorrowGoal\` if you have a multi-day strategy.**
 
 Think step-by-step. ALWAYS complete the craft→open→invest cycle. Never half-commit.
 `;
